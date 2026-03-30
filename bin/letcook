@@ -283,6 +283,9 @@ def copy_if_missing(src: Path, dst: Path) -> None:
         console.print(f"  [green]CREATE[/green] {dst}")
 
 
+KNOWN_TOOLS = {"claude", "qubito", "cursor", "windsurf", "continue", "aider", "codex", "copilot"}
+
+
 # --- Tool integration installer ---
 
 def install_tool_integration(tool: str, target: Path) -> None:
@@ -337,8 +340,8 @@ def cmd_help() -> None:
     help_table.add_column("Command", style="bold cyan", no_wrap=True)
     help_table.add_column("Description")
 
-    help_table.add_row("init [dir] [--tool <tool>]", "Scaffold a new project")
-    help_table.add_row("run  [dir] [--tool <tool>]", "Run the loop with a specific tool")
+    help_table.add_row("init [dir] [tool]", "Scaffold a new project")
+    help_table.add_row("run  [dir] [tool]", "Run the loop with a specific tool")
     help_table.add_row("help", "Show this help")
     help_table.add_row("version", "Show version")
 
@@ -355,6 +358,7 @@ def cmd_help() -> None:
 
     tools = [
         ("claude", "Claude Code (headless CLI)"),
+        ("qubito", "Qubito (headless CLI)"),
         ("cursor", "Cursor (rules file)"),
         ("windsurf", "Windsurf (rules file)"),
         ("continue", "Continue.dev (rules file)"),
@@ -370,8 +374,10 @@ def cmd_help() -> None:
 
     console.print("[dim]Examples:[/dim]")
     console.print("  letcook init ./my-task                [dim]# scaffold[/dim]")
-    console.print("  letcook init ./my-task --tool claude  [dim]# scaffold + Claude skills[/dim]")
-    console.print("  letcook run  ./my-task --tool claude  [dim]# run headless[/dim]")
+    console.print("  letcook init ./my-task claude          [dim]# scaffold + Claude skills[/dim]")
+    console.print("  letcook run  ./my-task claude          [dim]# run with Claude[/dim]")
+    console.print("  letcook run  ./my-task qubito          [dim]# run with Qubito[/dim]")
+    console.print("  letcook run  ./my-task --tool claude   [dim]# --tool also works[/dim]")
     console.print()
 
 
@@ -390,6 +396,9 @@ def cmd_init(args: list[str]) -> None:
         if args[i] == "--tool" and i + 1 < len(args):
             tool = args[i + 1]
             i += 2
+        elif args[i] in KNOWN_TOOLS:
+            tool = args[i]
+            i += 1
         else:
             target_dir = Path(args[i])
             i += 1
@@ -450,6 +459,9 @@ def cmd_run(args: list[str]) -> None:
         if args[i] == "--tool" and i + 1 < len(args):
             tool = args[i + 1]
             i += 2
+        elif args[i] in KNOWN_TOOLS:
+            tool = args[i]
+            i += 1
         else:
             target_dir = Path(args[i])
             i += 1
@@ -469,7 +481,7 @@ def cmd_run(args: list[str]) -> None:
     # Auto-detect tool
     detected = ""
     if not tool:
-        for candidate in ["claude", "aider", "codex", "copilot"]:
+        for candidate in ["claude", "qubito", "aider", "codex", "copilot"]:
             if shutil.which(candidate):
                 tool = candidate
                 detected = " (auto-detected)"
@@ -580,6 +592,88 @@ def cmd_run(args: list[str]) -> None:
             )
         sys.exit(exit_code)
 
+    elif tool == "qubito":
+        tool_label = f"qubito{detected}"
+        start_time = int(time.time())
+
+        os.chdir(target_dir)
+        log_file = Path(".letcook.log")
+        stopped_by_user = False
+
+        with open(log_file, "w") as log:
+            proc = subprocess.Popen(
+                ["qubito", "-p", prompt],
+                stdout=log, stderr=subprocess.STDOUT,
+            )
+
+            old_settings = None
+            stdin_fd = sys.stdin.fileno()
+            try:
+                old_settings = termios.tcgetattr(stdin_fd)
+                tty.setcbreak(stdin_fd)
+            except (termios.error, OSError):
+                pass
+
+            try:
+                while proc.poll() is None:
+                    iteration, score, status = parse_loop_state(
+                        Path("loop-state.md")
+                    )
+                    if proc.poll() is None:
+                        status = status if status != "ready" else "running"
+                    elapsed = format_elapsed(int(time.time()) - start_time)
+
+                    console.clear()
+                    console.print(build_status_panel(
+                        goal, prog_type, tool_label, iteration, max_iter,
+                        threshold, score, status, elapsed, hard, soft,
+                        output_dir,
+                    ))
+
+                    if old_settings is not None:
+                        ready, _, _ = select.select([stdin_fd], [], [], 3)
+                        if ready:
+                            ch = os.read(stdin_fd, 1)
+                            if ch == b'\x1b':
+                                stopped_by_user = True
+                                proc.send_signal(signal.SIGTERM)
+                                proc.wait(timeout=10)
+                                break
+                    else:
+                        time.sleep(3)
+            except KeyboardInterrupt:
+                stopped_by_user = True
+                proc.send_signal(signal.SIGTERM)
+                proc.wait(timeout=10)
+            finally:
+                if old_settings is not None:
+                    termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+            exit_code = proc.returncode or 0
+
+        iteration, score, status = parse_loop_state(Path("loop-state.md"))
+        if stopped_by_user:
+            status = "stopped"
+        elapsed = format_elapsed(int(time.time()) - start_time)
+
+        console.clear()
+        panel = build_status_panel(
+            goal, prog_type, tool_label, iteration, max_iter, threshold,
+            score, status, elapsed, hard, soft, output_dir,
+        )
+        console.print(panel)
+        console.print()
+
+        if stopped_by_user:
+            console.print("[bold yellow]⏹ Stopped by user.[/bold yellow]")
+        elif exit_code == 0:
+            console.print("[bold green]✓ Done.[/bold green]")
+        else:
+            console.print(
+                f"[bold red]✗ Qubito exited with code {exit_code}[/bold red]"
+            )
+        sys.exit(exit_code)
+
     elif tool == "aider":
         console.print(f"[bold cyan]Running with Aider{detected}…[/bold cyan]")
         console.print()
@@ -611,7 +705,7 @@ def cmd_run(args: list[str]) -> None:
                 "[bold yellow]No AI tool detected.[/bold yellow]\n\n"
                 "Paste this prompt into your AI assistant:\n\n"
                 f"  [bold]{prompt}[/bold]\n\n"
-                "[dim]Or install one of: claude, aider, codex, copilot[/dim]",
+                "[dim]Or install one of: claude, qubito, aider, codex, copilot[/dim]",
                 border_style="yellow",
                 padding=(1, 2),
             )
