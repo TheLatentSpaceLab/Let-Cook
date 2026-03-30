@@ -12,6 +12,18 @@ The bottleneck is no longer the AI's ability. It's the **structure of the prompt
 
 Inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch), which demonstrated that AI agents can autonomously run LLM training experiments overnight — modifying code, running 5-minute training runs, evaluating loss, and deciding whether to keep or discard changes — all while the human sleeps. **letcook** generalizes that pattern beyond ML experiments to any task type: building applications, conducting research, writing content, or refactoring code.
 
+## How the Loop Works
+
+![letcook — Autonomous Producer/Evaluator Loop](diagram.png)
+
+1. **Producer** reads the program and previous feedback, then builds/writes/researches.
+2. **Evaluator** scores the output against restrictions and success criteria.
+3. **Loop state** captures structured feedback so the next iteration knows what to fix.
+4. Repeats until the quality threshold is met or iterations are exhausted.
+
+The loop stops early when **all hard constraints pass** AND the **score >= completion_threshold**.
+
+
 ## Install
 
 **One-liner:**
@@ -197,33 +209,6 @@ Quality gates the evaluator checks every iteration:
 | `content` | Writes articles, scripts, media | Tone, structure, accuracy, audience fit |
 | `experiment` | Runs experiments, logs metrics | Metrics improving, valid methodology |
 | `refactor` | Restructures existing code | Behavior preserved, quality improved |
-
-## How the Loop Works
-
-```
-┌─────────────┐     ┌──────────┐     ┌───────────┐
-│ program.md  │────>│ Producer │────>│ Evaluator │
-│ (what to do)│     │ (cooks)  │     │ (tastes)  │
-└─────────────┘     └────┬─────┘     └─────┬─────┘
-                         │                  │
-┌─────────────┐          │   ┌──────────┐   │
-│restrictions │──────────┼──>│loop-state│<──┘
-│.md (quality │          │   │.md       │
-│ gates)      │          │   │(history) │───> loops back
-└─────────────┘          │   └──────────┘     to producer
-                         v
-                  ┌────────────┐
-                  │  ./output/ │
-                  │ (the dish) │
-                  └────────────┘
-```
-
-1. **Producer** reads the program and previous feedback, then builds/writes/researches.
-2. **Evaluator** scores the output against restrictions and success criteria.
-3. **Loop state** captures structured feedback so the next iteration knows what to fix.
-4. Repeats until the quality threshold is met or iterations are exhausted.
-
-The loop stops early when **all hard constraints pass** AND the **score >= completion_threshold**.
 
 ## Tool-Specific Setup
 
