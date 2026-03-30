@@ -429,10 +429,15 @@ def cmd_init(args: list[str]) -> None:
     console.print()
 
 
-def get_allowed_tools(prog_type: str) -> list[str]:
-    """Get the full allowed tools list for a program type."""
-    extra = CLAUDE_TOOLS_BY_TYPE.get(prog_type, [])
-    return CLAUDE_BASE_TOOLS + extra
+def get_allowed_tools(prog_type: str, extra_tools: str = "") -> list[str]:
+    """Get the full allowed tools list for a program type + extras."""
+    tools = CLAUDE_BASE_TOOLS + CLAUDE_TOOLS_BY_TYPE.get(prog_type, [])
+    if extra_tools:
+        for t in extra_tools.split(","):
+            t = t.strip()
+            if t and t not in tools:
+                tools.append(t)
+    return tools
 
 
 def cmd_run(args: list[str]) -> None:
@@ -479,6 +484,7 @@ def cmd_run(args: list[str]) -> None:
     max_iter = int(fm.get("iterations", "5"))
     threshold = int(fm.get("completion_threshold", "90"))
     output_dir = fm.get("output", "./output/")
+    extra_tools = fm.get("tools", "")
     goal = parse_goal(program_file)
     hard = count_constraints(restrictions_file, "Hard Constraints")
     soft = count_constraints(restrictions_file, "Soft Constraints")
@@ -486,7 +492,7 @@ def cmd_run(args: list[str]) -> None:
     console.print()
 
     if tool == "claude":
-        allowed_tools = get_allowed_tools(prog_type)
+        allowed_tools = get_allowed_tools(prog_type, extra_tools)
         allowed_tools_str = ",".join(allowed_tools)
         tool_label = f"claude{detected}"
         start_time = int(time.time())
