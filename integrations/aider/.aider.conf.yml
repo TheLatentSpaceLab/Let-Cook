@@ -1,0 +1,10 @@
+# Autonomous Loop — Aider integration
+# Place this file in your project root alongside skill.md, program.md, and restrictions.md
+#
+# Usage:
+#   aider --read skill.md --read program.md --read restrictions.md --message "Execute the autonomous loop as defined in skill.md."
+
+read:
+  - skill.md
+  - program.md
+  - restrictions.md

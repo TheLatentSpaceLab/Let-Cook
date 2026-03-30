@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+#
+# letcook — let him cook
+#
+# A tool-agnostic standard for running autonomous producer/evaluator loops
+# with AI coding assistants.
+#
+# Usage:
+#   letcook init [dir] [--tool <tool>]   Scaffold a new project
+#   letcook run  [dir] [--tool <tool>]   Run the loop with a specific tool
+#   letcook help                         Show this help message
+#   letcook version                      Show version
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# --- Resolve install directory ---
+
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Support both repo layout (bin/letcook → ..) and install layout (~/.letcook/bin/letcook → ~/.letcook)
+LETCOOK_HOME="$(dirname "$SCRIPT_PATH")"
+
+# --- Colors ---
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# --- Helpers ---
+
+info()    { echo -e "${CYAN}$1${NC}"; }
+success() { echo -e "${GREEN}$1${NC}"; }
+warn()    { echo -e "${YELLOW}$1${NC}"; }
+err()     { echo -e "${RED}$1${NC}" >&2; }
+
+copy_if_missing() {
+    local src="$1" dst="$2"
+    if [ -f "$dst" ]; then
+        warn "  SKIP   $dst (already exists)"
+    else
+        cp "$src" "$dst"
+        success "  CREATE $dst"
+    fi
+}
+
+# --- Commands ---
+
+cmd_help() {
+    cat <<'HELP'
+letcook — let him cook
+
+Usage:
+  letcook init [dir] [--tool <tool>]   Scaffold a new project
+  letcook run  [dir] [--tool <tool>]   Run the loop with a specific tool
+  letcook help                         Show this help
+  letcook version                      Show version
+
+Tools:
+  claude      Claude Code (slash commands + headless CLI)
+  cursor      Cursor (rules file)
+  windsurf    Windsurf (rules file)
+  continue    Continue.dev (rules file)
+  aider       Aider (config file)
+  codex       OpenAI Codex CLI (prints command)
+  copilot     GitHub Copilot CLI (prints command)
+
+Examples:
+  letcook init ./my-task                Scaffold with no tool integration
+  letcook init ./my-task --tool claude  Scaffold + Claude Code skills
+  letcook run ./my-task --tool claude   Run headless with Claude Code
+  letcook run ./my-task --tool aider    Run with Aider
+HELP
+}
+
+cmd_version() {
+    echo "letcook $VERSION"
+}
+
+cmd_init() {
+    local target_dir="."
+    local tool=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --tool) tool="$2"; shift 2 ;;
+            *)      target_dir="$1"; shift ;;
+        esac
+    done
+
+    mkdir -p "$target_dir"
+
+    echo ""
+    info "${BOLD}Initializing autonomous loop project...${NC}"
+    echo ""
+
+    # Core files
+    copy_if_missing "$LETCOOK_HOME/skill.md"               "$target_dir/skill.md"
+    copy_if_missing "$LETCOOK_HOME/templates/program.md"    "$target_dir/program.md"
+    copy_if_missing "$LETCOOK_HOME/templates/restrictions.md" "$target_dir/restrictions.md"
+
+    # Tool integration
+    if [ -n "$tool" ]; then
+        echo ""
+        install_tool_integration "$tool" "$target_dir"
+    fi
+
+    echo ""
+    success "${BOLD}Project initialized in $target_dir${NC}"
+    echo ""
+    echo -e "Next steps:"
+    echo -e "  1. Edit ${BOLD}$target_dir/program.md${NC}      — define your task"
+    echo -e "  2. Edit ${BOLD}$target_dir/restrictions.md${NC}  — set quality gates"
+    echo -e "  3. Run:  ${CYAN}letcook run $target_dir${NC}"
+    echo ""
+}
+
+cmd_run() {
+    local target_dir="."
+    local tool=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --tool) tool="$2"; shift 2 ;;
+            *)      target_dir="$1"; shift ;;
+        esac
+    done
+
+    # Validate project files exist
+    for file in skill.md program.md restrictions.md; do
+        if [ ! -f "$target_dir/$file" ]; then
+            err "Missing $target_dir/$file"
+            err "Run 'letcook init $target_dir' first."
+            exit 1
+        fi
+    done
+
+    local prompt="Read skill.md, program.md, and restrictions.md, then execute the autonomous loop as defined in skill.md."
+
+    # Auto-detect tool if not specified
+    if [ -z "$tool" ]; then
+        if command -v claude &>/dev/null; then
+            tool="claude"
+        elif command -v aider &>/dev/null; then
+            tool="aider"
+        elif command -v codex &>/dev/null; then
+            tool="codex"
+        elif command -v copilot &>/dev/null; then
+            tool="copilot"
+        fi
+    fi
+
+    echo ""
+
+    case "$tool" in
+        claude)
+            info "Running with Claude Code..."
+            echo ""
+            cd "$target_dir"
+            exec claude -p "$prompt" \
+                --allowedTools "Read,Write,Edit,Bash,Glob,Grep,Agent"
+            ;;
+        aider)
+            info "Running with Aider..."
+            echo ""
+            exec aider \
+                --read "$target_dir/skill.md" \
+                --read "$target_dir/program.md" \
+                --read "$target_dir/restrictions.md" \
+                --message "$prompt"
+            ;;
+        codex)
+            info "Running with Codex CLI..."
+            echo ""
+            cd "$target_dir"
+            exec codex exec "$prompt"
+            ;;
+        copilot)
+            info "Running with GitHub Copilot CLI..."
+            echo ""
+            cd "$target_dir"
+            exec copilot -p "$prompt"
+            ;;
+        "")
+            warn "No AI tool detected. Paste this prompt into your AI assistant:"
+            echo ""
+            echo -e "  ${BOLD}$prompt${NC}"
+            echo ""
+            echo "Or install one of: claude, aider, codex, copilot"
+            ;;
+        *)
+            err "Tool '$tool' doesn't support headless execution."
+            echo ""
+            echo "For $tool, open the project in your IDE and tell the AI:"
+            echo ""
+            echo -e "  ${BOLD}Start working on this project.${NC}"
+            echo ""
+            ;;
+    esac
+}
+
+install_tool_integration() {
+    local tool="$1"
+    local target_dir="$2"
+
+    case "$tool" in
+        claude)
+            mkdir -p "$target_dir/.claude/skills/start-project"
+            mkdir -p "$target_dir/.claude/skills/start-working"
+            copy_if_missing "$LETCOOK_HOME/integrations/claude/skills/start-project/SKILL.md" \
+                           "$target_dir/.claude/skills/start-project/SKILL.md"
+            copy_if_missing "$LETCOOK_HOME/integrations/claude/skills/start-working/SKILL.md" \
+                           "$target_dir/.claude/skills/start-working/SKILL.md"
+            ;;
+        cursor)
+            mkdir -p "$target_dir/.cursor/rules"
+            copy_if_missing "$LETCOOK_HOME/integrations/cursor/autonomous-loop.mdc" \
+                           "$target_dir/.cursor/rules/autonomous-loop.mdc"
+            ;;
+        windsurf)
+            mkdir -p "$target_dir/.windsurf/rules"
+            copy_if_missing "$LETCOOK_HOME/integrations/windsurf/autonomous-loop.md" \
+                           "$target_dir/.windsurf/rules/autonomous-loop.md"
+            ;;
+        continue)
+            mkdir -p "$target_dir/.continue/rules"
+            copy_if_missing "$LETCOOK_HOME/integrations/continue/autonomous-loop.md" \
+                           "$target_dir/.continue/rules/autonomous-loop.md"
+            ;;
+        aider)
+            copy_if_missing "$LETCOOK_HOME/integrations/aider/.aider.conf.yml" \
+                           "$target_dir/.aider.conf.yml"
+            ;;
+        *)
+            warn "Unknown tool '$tool'. Skipping integration."
+            echo "  Supported: claude, cursor, windsurf, continue, aider"
+            ;;
+    esac
+}
+
+# --- Main ---
+
+case "${1:-help}" in
+    init)    shift; cmd_init "$@" ;;
+    run)     shift; cmd_run "$@" ;;
+    help)    cmd_help ;;
+    version) cmd_version ;;
+    *)       err "Unknown command: $1"; echo ""; cmd_help; exit 1 ;;
+esac
