@@ -34,7 +34,8 @@ echo ""
 # Clone or update
 if [ -d "$LETCOOK_HOME/.git" ]; then
     info "Updating existing installation..."
-    git -C "$LETCOOK_HOME" pull --rebase --quiet
+    git -C "$LETCOOK_HOME" fetch --quiet origin
+    git -C "$LETCOOK_HOME" reset --quiet --hard origin/main
 else
     rm -rf "$LETCOOK_HOME"
     git clone --quiet "$REPO_URL" "$LETCOOK_HOME"
