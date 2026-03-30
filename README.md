@@ -17,13 +17,13 @@ Inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/autores
 **One-liner:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<owner>/letcook/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/TheLatentSpaceLab/Let-Cook/main/install.sh | bash
 ```
 
 **From source:**
 
 ```bash
-git clone <repo-url> ~/letcook
+git clone git@github.com:TheLatentSpaceLab/Let-Cook.git ~/letcook
 cd ~/letcook
 make install
 ```
@@ -31,7 +31,7 @@ make install
 **For development** (symlink instead of copy):
 
 ```bash
-git clone <repo-url> ~/letcook
+git clone git@github.com:TheLatentSpaceLab/Let-Cook.git ~/letcook
 cd ~/letcook
 make link
 ```
@@ -321,4 +321,3 @@ letcook/
 ## Acknowledgments
 
 Inspired by Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch).
-# Let-Cook

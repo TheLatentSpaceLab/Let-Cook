@@ -2,7 +2,7 @@
 #
 # One-liner install for letcook:
 #
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/letcook/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/TheLatentSpaceLab/Let-Cook/main/install.sh | bash
 #
 # Or with a custom install directory:
 #
@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/<owner>/letcook"
+REPO_URL="https://github.com/TheLatentSpaceLab/Let-Cook"
 LETCOOK_HOME="${LETCOOK_HOME:-$HOME/.letcook}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 
