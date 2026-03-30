@@ -39,6 +39,26 @@ success() { echo -e "${GREEN}$1${NC}"; }
 warn()    { echo -e "${YELLOW}$1${NC}"; }
 err()     { echo -e "${RED}$1${NC}" >&2; }
 
+parse_program_type() {
+    local program_file="$1"
+    sed -n '/^---$/,/^---$/p' "$program_file" \
+        | grep -E '^type:' \
+        | head -1 \
+        | sed 's/^type:[[:space:]]*//' \
+        | sed 's/[[:space:]]*#.*//' \
+        | tr -d '[:space:]'
+}
+
+claude_tools_for_type() {
+    local base="Read,Write,Edit,Bash,Glob,Grep,Agent"
+    case "${1:-build}" in
+        research)   echo "$base,WebSearch,WebFetch" ;;
+        content)    echo "$base,WebSearch,WebFetch" ;;
+        experiment) echo "$base,WebSearch,WebFetch,NotebookEdit" ;;
+        *)          echo "$base" ;;
+    esac
+}
+
 copy_if_missing() {
     local src="$1" dst="$2"
     if [ -f "$dst" ]; then
@@ -163,11 +183,15 @@ cmd_run() {
 
     case "$tool" in
         claude)
-            info "Running with Claude Code${detected}..."
+            local program_type
+            program_type="$(parse_program_type "$target_dir/specs/program.md")"
+            local allowed_tools
+            allowed_tools="$(claude_tools_for_type "$program_type")"
+            info "Running with Claude Code${detected}... (type: ${program_type:-build})"
             echo ""
             cd "$target_dir"
             exec claude -p "$prompt" \
-                --allowedTools "Read,Write,Edit,Bash,Glob,Grep,Agent"
+                --allowedTools "$allowed_tools"
             ;;
         aider)
             info "Running with Aider${detected}..."
