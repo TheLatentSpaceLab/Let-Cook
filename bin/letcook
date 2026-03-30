@@ -39,14 +39,18 @@ success() { echo -e "${GREEN}$1${NC}"; }
 warn()    { echo -e "${YELLOW}$1${NC}"; }
 err()     { echo -e "${RED}$1${NC}" >&2; }
 
-parse_program_type() {
-    local program_file="$1"
-    sed -n '/^---$/,/^---$/p' "$program_file" \
-        | grep -E '^type:' \
+parse_frontmatter_field() {
+    local file="$1" field="$2"
+    sed -n '/^---$/,/^---$/p' "$file" \
+        | grep -E "^${field}:" \
         | head -1 \
-        | sed 's/^type:[[:space:]]*//' \
+        | sed "s/^${field}:[[:space:]]*//" \
         | sed 's/[[:space:]]*#.*//' \
         | tr -d '[:space:]'
+}
+
+parse_program_type() {
+    parse_frontmatter_field "$1" "type"
 }
 
 claude_tools_for_type() {
@@ -57,6 +61,161 @@ claude_tools_for_type() {
         experiment) echo "$base,WebSearch,WebFetch,NotebookEdit" ;;
         *)          echo "$base" ;;
     esac
+}
+
+parse_goal() {
+    local file="$1"
+    local in_goal=false
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##[[:space:]]+Goal ]]; then
+            in_goal=true
+            continue
+        fi
+        if $in_goal; then
+            [[ "$line" =~ ^## ]] && break
+            [[ "$line" =~ ^\<\!-- ]] && continue
+            [[ -z "$line" ]] && continue
+            echo "$line"
+            return
+        fi
+    done < "$file"
+}
+
+count_constraints() {
+    local file="$1" section="$2"
+    local in_section=false count=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##[[:space:]]+"$section" ]]; then
+            in_section=true
+            continue
+        fi
+        if $in_section; then
+            [[ "$line" =~ ^## ]] && break
+            [[ "$line" =~ ^\<\!-- ]] && continue
+            [[ "$line" =~ ^-[[:space:]]+.+ ]] && ((count++))
+        fi
+    done < "$file"
+    echo "$count"
+}
+
+format_elapsed() {
+    local seconds="$1"
+    local h=$((seconds / 3600))
+    local m=$(( (seconds % 3600) / 60 ))
+    local s=$((seconds % 60))
+    if (( h > 0 )); then
+        printf "%dh %02dm %02ds" "$h" "$m" "$s"
+    elif (( m > 0 )); then
+        printf "%dm %02ds" "$m" "$s"
+    else
+        printf "%ds" "$s"
+    fi
+}
+
+parse_loop_state() {
+    local file="$1"
+    local iteration=0 score="-" status="ready" last_status=""
+    if [ ! -f "$file" ]; then
+        echo "0 - ready"
+        return
+    fi
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##[[:space:]]+Iteration[[:space:]]+([0-9]+) ]]; then
+            iteration="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^\*\*Score\*\*:[[:space:]]*([0-9]+) ]]; then
+            score="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^\*\*Status\*\*:[[:space:]]*(.+) ]]; then
+            last_status="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^##[[:space:]]+Summary ]]; then
+            last_status="done"
+        fi
+    done < "$file"
+    status="${last_status:-running}"
+    echo "$iteration $score $status"
+}
+
+print_status_box() {
+    local goal="$1" prog_type="$2" tool_name="$3" iteration="$4"
+    local max_iter="$5" threshold="$6" score="$7" status="$8"
+    local elapsed="$9" hard="${10}" soft="${11}" output_dir="${12}"
+
+    # Truncate goal to fit box (31 chars for the value column)
+    local max_goal=31
+    if (( ${#goal} > max_goal )); then
+        goal="${goal:0:$((max_goal - 3))}..."
+    fi
+
+    # Status color
+    local status_color="$CYAN"
+    case "$status" in
+        ready)              status_color="$CYAN" ;;
+        running)            status_color="$YELLOW" ;;
+        passed|completed)   status_color="$GREEN" ;;
+        failed|exhausted)   status_color="$RED" ;;
+        needs_improvement)  status_color="$YELLOW" ;;
+        done)               status_color="$GREEN" ;;
+    esac
+
+    # Score display
+    local score_display="$score"
+    if [[ "$score" != "-" ]]; then
+        score_display="${score} / ${threshold}"
+    fi
+
+    printf "\033[2J\033[H"
+    echo -e "${BOLD}┌──────────────────────────────────────────────┐${NC}"
+    echo -e "${BOLD}│${NC}  ${BOLD}letcook${NC}                                     ${BOLD}│${NC}"
+    echo -e "${BOLD}├──────────────────────────────────────────────┤${NC}"
+    printf "${BOLD}│${NC}  Goal:        %-31s ${BOLD}│${NC}\n" "$goal"
+    printf "${BOLD}│${NC}  Type:        %-31s ${BOLD}│${NC}\n" "$prog_type"
+    printf "${BOLD}│${NC}  Tool:        %-31s ${BOLD}│${NC}\n" "$tool_name"
+    printf "${BOLD}│${NC}  Iterations:  %-31s ${BOLD}│${NC}\n" "$iteration / $max_iter"
+    printf "${BOLD}│${NC}  Score:       %-31s ${BOLD}│${NC}\n" "$score_display"
+    printf "${BOLD}│${NC}  Constraints: %-31s ${BOLD}│${NC}\n" "${hard} hard · ${soft} soft"
+    printf "${BOLD}│${NC}  Output:      %-31s ${BOLD}│${NC}\n" "$output_dir"
+    echo -e "${BOLD}├──────────────────────────────────────────────┤${NC}"
+    printf "${BOLD}│${NC}  Status:      ${status_color}%-31s${NC} ${BOLD}│${NC}\n" "$status"
+    printf "${BOLD}│${NC}  Elapsed:     %-31s ${BOLD}│${NC}\n" "$elapsed"
+    echo -e "${BOLD}└──────────────────────────────────────────────┘${NC}"
+}
+
+STATUS_WATCHER_PID=""
+
+cleanup_watcher() {
+    if [ -n "$STATUS_WATCHER_PID" ] && kill -0 "$STATUS_WATCHER_PID" 2>/dev/null; then
+        kill "$STATUS_WATCHER_PID" 2>/dev/null
+        wait "$STATUS_WATCHER_PID" 2>/dev/null
+    fi
+}
+
+start_status_watcher() {
+    local target_dir="$1" goal="$2" prog_type="$3" tool_name="$4"
+    local max_iter="$5" threshold="$6" hard="$7" soft="$8"
+    local output_dir="$9" start_time="${10}"
+
+    (
+        while true; do
+            local loop_file="$target_dir/loop-state.md"
+            local state
+            state="$(parse_loop_state "$loop_file")"
+            local iteration score status
+            iteration="$(echo "$state" | cut -d' ' -f1)"
+            score="$(echo "$state" | cut -d' ' -f2)"
+            status="$(echo "$state" | cut -d' ' -f3-)"
+
+            local now elapsed_str
+            now="$(date +%s)"
+            elapsed_str="$(format_elapsed $((now - start_time)))"
+
+            print_status_box "$goal" "$prog_type" "$tool_name" \
+                "$iteration" "$max_iter" "$threshold" "$score" "$status" \
+                "$elapsed_str" "$hard" "$soft" "$output_dir"
+
+            [[ "$status" == "done" || "$status" == "completed" || "$status" == "exhausted" ]] && break
+            sleep 5
+        done
+    ) &
+    STATUS_WATCHER_PID=$!
 }
 
 copy_if_missing() {
@@ -181,17 +340,71 @@ cmd_run() {
 
     echo ""
 
+    # Parse project metadata for status display
+    local program_file="$target_dir/specs/program.md"
+    local restrictions_file="$target_dir/specs/restrictions.md"
+    local program_type
+    program_type="$(parse_program_type "$program_file")"
+    program_type="${program_type:-build}"
+    local max_iter
+    max_iter="$(parse_frontmatter_field "$program_file" "iterations")"
+    max_iter="${max_iter:-5}"
+    local threshold
+    threshold="$(parse_frontmatter_field "$program_file" "completion_threshold")"
+    threshold="${threshold:-90}"
+    local output_dir
+    output_dir="$(parse_frontmatter_field "$program_file" "output")"
+    output_dir="${output_dir:-./output/}"
+    local goal
+    goal="$(parse_goal "$program_file")"
+    goal="${goal:-(not set)}"
+    local hard soft
+    hard="$(count_constraints "$restrictions_file" "Hard Constraints")"
+    soft="$(count_constraints "$restrictions_file" "Soft Constraints")"
+
     case "$tool" in
         claude)
-            local program_type
-            program_type="$(parse_program_type "$target_dir/specs/program.md")"
             local allowed_tools
             allowed_tools="$(claude_tools_for_type "$program_type")"
-            info "Running with Claude Code${detected}... (type: ${program_type:-build})"
-            echo ""
+            local tool_label="claude${detected}"
+            local start_time
+            start_time="$(date +%s)"
+
+            trap cleanup_watcher EXIT INT TERM
+
+            start_status_watcher "$target_dir" "$goal" "$program_type" \
+                "$tool_label" "$max_iter" "$threshold" "$hard" "$soft" \
+                "$output_dir" "$start_time"
+
             cd "$target_dir"
-            exec claude -p "$prompt" \
-                --allowedTools "$allowed_tools"
+            claude -p "$prompt" --allowedTools "$allowed_tools" > /dev/null 2>&1
+            local exit_code=$?
+
+            cleanup_watcher
+
+            # Final status
+            local state
+            state="$(parse_loop_state "loop-state.md")"
+            local iteration score status
+            iteration="$(echo "$state" | cut -d' ' -f1)"
+            score="$(echo "$state" | cut -d' ' -f2)"
+            status="$(echo "$state" | cut -d' ' -f3-)"
+
+            local end_time elapsed_str
+            end_time="$(date +%s)"
+            elapsed_str="$(format_elapsed $((end_time - start_time)))"
+
+            print_status_box "$goal" "$program_type" "$tool_label" \
+                "$iteration" "$max_iter" "$threshold" "$score" "$status" \
+                "$elapsed_str" "$hard" "$soft" "$output_dir"
+
+            echo ""
+            if [ $exit_code -eq 0 ]; then
+                success "Done."
+            else
+                err "Claude exited with code $exit_code"
+            fi
+            exit $exit_code
             ;;
         aider)
             info "Running with Aider${detected}..."
